@@ -5,3 +5,7 @@ class MetricInput(BaseModel):
     expression: str=Field(min_length=1,max_length=200)
     unit: str=Field(default="元",max_length=16)
     description: str=Field(min_length=8,max_length=600)
+class MetricPublish(BaseModel):
+    base_version: int=Field(ge=0)
+    note: str=Field(min_length=2,max_length=200)
+    metrics: list[MetricInput]=Field(min_length=1,max_length=50)

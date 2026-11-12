@@ -4,6 +4,7 @@ from src.config.database import SessionLocal,Base,engine
 from src.models import User,Metric,SourceRow,ReportRun,DeliverySchedule,Delivery
 from src.utils.security import hash_password
 from src.services.pivot_service import build_report
+from src.services.metric_service import ensure_version,definitions_for_version
 
 def seed():
     Base.metadata.create_all(engine)
@@ -25,6 +26,7 @@ def seed():
             reference=round(revenue-refunds+(2.5 if channel=="书店合作" and day.startswith("2026-10") else 0),2)
             if key not in existing:db.add(SourceRow(source_key=key,day=day,channel=channel,region=region,revenue=revenue,refunds=refunds,cost=cost,orders=orders,reference_net=reference))
         db.flush();schedules=[]
+        version=ensure_version(db,"seed")
         for name,mins,active in [("经营周报 · 渠道/月",10080,True),("区域午间校对",1440,False)]:
             schedule=db.query(DeliverySchedule).filter_by(name=name).first()
             if not schedule:
@@ -32,8 +34,8 @@ def seed():
                 db.add(schedule);db.flush()
             schedules.append(schedule)
         if not db.query(ReportRun).filter_by(name="11月经营口径核对 · 基准").first():
-            result=build_report(db.query(SourceRow).order_by(SourceRow.id).all(),db.query(Metric).order_by(Metric.id).all(),["channel","month"])
-            run=ReportRun(name="11月经营口径核对 · 基准",dimensions=["channel","month"],status="completed",result=result,owner="宋予 · 经营分析师",schedule_id=schedules[0].id)
+            result=build_report(db.query(SourceRow).order_by(SourceRow.id).all(),definitions_for_version(db,version.id if version else None),["channel","month"])
+            run=ReportRun(name="11月经营口径核对 · 基准",dimensions=["channel","month"],status="completed",result=result,owner="宋予 · 经营分析师",schedule_id=schedules[0].id,metric_version_id=version.id if version else None)
             db.add(run);db.flush();db.add(Delivery(schedule_id=schedules[0].id,run_id=run.id,title="经营周报 · 基准交付"))
         db.commit();print(json.dumps({m.__tablename__:db.query(m).count() for m in [User,Metric,SourceRow,ReportRun,DeliverySchedule,Delivery]},ensure_ascii=False))
 if __name__=="__main__":seed()

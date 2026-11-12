@@ -1,9 +1,8 @@
 import json,time,traceback
 from pathlib import Path
 from .config.database import SessionLocal,engine,Base
-from .models import ReportRun,SourceRow,Metric,Delivery
-from .services.report_service import queue
-from .services.pivot_service import build_report
+from .models import ReportRun,Delivery
+from .services.report_service import queue,compute_run
 from .services.scheduler_service import schedule_due
 from .services.audit_service import log
 from .constants.status import RunStatus
@@ -19,7 +18,7 @@ while True:
             if not run or run.status!=RunStatus.QUEUED:continue
             run.status=RunStatus.RUNNING;db.commit()
             try:
-                run.result=build_report(db.query(SourceRow).order_by(SourceRow.id).all(),db.query(Metric).order_by(Metric.id).all(),run.dimensions)
+                compute_run(db,run)
                 run.status=RunStatus.COMPLETED
                 Path(f"/artifacts/report-{run.id}.json").write_text(json.dumps(run.result,ensure_ascii=False))
                 if run.schedule_id:db.add(Delivery(schedule_id=run.schedule_id,run_id=run.id,title=run.name))

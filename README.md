@@ -37,7 +37,7 @@ docker compose exec -T backend python -m scripts.seed_demo
 
 1. 09:00 宋予以analyst登录，检查1800条来源与基准透视。
 2. 09:05 在来源核对发现书店合作2026-10的参考账本多计750元，查看300条来源的归因。
-3. 09:10 陆知衡以admin登录，在指标口径登记 `profit_per_order = gross_profit / orders`，说明先汇总再计算。
+3. 09:10 陆知衡以admin登录，在指标口径进入整组编辑，把 `profit_per_order = gross_profit / orders` 加入草稿并填写发布说明，整组校验通过后发布为新版本，说明先汇总再计算。
 4. 09:15 宋予创建“11月渠道经营核对”，选择渠道×月份，提交异步计算。
 5. worker消费队列，按冻结口径和来源生成6个维度单元及重算合计，结果保存表达式快照与来源SHA256。
 6. 09:20 阅读毛利、每单净收入、差异并下载CSV；比率不简单累加。
@@ -53,6 +53,8 @@ docker compose exec -T backend python -m scripts.seed_demo
 **透视与差异归因**：`pivot_service.py` 先按1–2个不重复维度（channel/month/region）分组，把原始金额、单数加总，再沿DAG计算派生指标。总计行重新汇总原始字段计算，绝不累加或简单平均比率。差异为来源`sum(revenue)-sum(refunds)`减`sum(reference_net)`；绝对差异大于0.01元的单元按绝对值降序归因。source_count和SHA256支持复算，输出保留6位小数。
 
 五项种子定义：net_revenue=revenue-refunds；gross_profit=net_revenue-cost；margin_rate=gross_profit/net_revenue；net_per_order=net_revenue/orders；refund_rate=refunds/revenue。比率单位为小数，界面显示4位。
+
+**指标版本化**：指标页支持整组编辑发布——一次改版可同时调整净收入、毛利等相互依赖的口径，提交时携带基线版本号。发布前整组校验（环路、未知依赖、覆盖来源字段、现有数据试算），任一失败则整组拒绝并保留现行定义；校验通过后在一个事务里替换现行定义并固化 `MetricVersion`+`MetricDefinition` 快照。他人先发布时基线过期，提交返回409拒绝覆盖，需载入最新定义重新修改。报表运行在创建时冻结 `metric_version_id`：已排队报表沿用创建时定义，新建手工报表与定时交付采用最新版本，历史报表结果不变，报表页与归档列表可查看所用版本号与发布说明。
 
 **定时交付**：独立worker每轮扫描到期且启用的DeliverySchedule，持久化新的ReportRun并推入Redis队列，完成计算后创建唯一run_id的Delivery。没有手动投递接口，分钟周期可用真实等待验证。计划以UTC存储，界面按浏览器时区显示；周期从实际执行时间向后推，不补发停机期间每次错过的周期。
 
@@ -71,11 +73,13 @@ docker compose exec -T backend python -m scripts.seed_demo
 backend/src/{models,schemas,services,controllers,routes,middlewares,utils,constants,config}
 backend/src/{main.py,worker.py}
 backend/scripts/seed_demo.py
+backend/tests/test_metric_versions.py
 backend/migrations/001_initial.sql
+backend/migrations/002_metric_versions.sql
 frontend/src/{api,stores,types,components,hooks,pages,router,utils,constants}
 ```
 
-共享角色枚举：`backend/src/constants/roles.py` / `frontend/src/constants/enums.ts`；运行状态枚举：`backend/src/constants/status.py` / 前述前端文件；维度枚举：`backend/src/constants/dimensions.py` / 前端enums。后端路由、schema和worker使用枚举，不信任前端授权。JWT有效8小时，密码PBKDF2-SHA256，权限每次查数据库。审计覆盖登录、定义登记、报表排队完成、计划启停/到期及交付。错误和登录限流两个中间件独立。
+共享角色枚举：`backend/src/constants/roles.py` / `frontend/src/constants/enums.ts`；运行状态枚举：`backend/src/constants/status.py` / 前述前端文件；维度枚举：`backend/src/constants/dimensions.py` / 前端enums。后端路由、schema和worker使用枚举，不信任前端授权。JWT有效8小时，密码PBKDF2-SHA256，权限每次查数据库。审计覆盖登录、定义登记与整组发布、报表排队完成、计划启停/到期及交付。错误和登录限流两个中间件独立。改版失败、发布冲突与跨版本计算的验证位于 `backend/tests/`，容器内执行 `python -m pytest tests/`。
 
 ## 环境与运维
 
@@ -100,7 +104,7 @@ docker compose down -v --remove-orphans
 
 外置测试与截图位于`../../test-artifacts/gb-0005/`，含算法、API、真实周期和浏览器证据。源码不含截图/测试报告/日志，`.env`与日志不提交。
 
-目前面向本地合成研究：无文件上传/外部邮件/多租户隔离；仅支持算术口径，不支持任意SQL或函数。单worker调度不提供多实例分布式锁；running任务崩溃需重新提交，数据库事务与Redis入队之间无事务outbox。金额采用浮点并在输出舍入，非财务总账记账引擎。表达式以当前定义计算且结果保存快照；未提供已注册指标编辑/删除，现有数据试算通过后才能登记，后续来源变化仍可能造成任务失败，结果页会显示错误。来源页最多预览100行，计算用全部来源。Google Fonts无网络会回退字体。
+目前面向本地合成研究：无文件上传/外部邮件/多租户隔离；仅支持算术口径，不支持任意SQL或函数。单worker调度不提供多实例分布式锁；running任务崩溃需重新提交，数据库事务与Redis入队之间无事务outbox。金额采用浮点并在输出舍入，非财务总账记账引擎。表达式按报表创建时冻结的版本计算且结果保存快照；改版以整组发布生效，现有数据试算通过后才能发布，后续来源变化仍可能造成任务失败，结果页会显示错误。来源页最多预览100行，计算用全部来源。Google Fonts无网络会回退字体。
 
 ## License
 

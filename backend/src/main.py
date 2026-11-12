@@ -12,6 +12,10 @@ from .services.report_service import queue
 @asynccontextmanager
 async def lifespan(app):
     Base.metadata.create_all(engine)
+    from .config.database import SessionLocal
+    from .services.metric_service import ensure_version
+    with SessionLocal() as db:
+        ensure_version(db);db.commit()
     if SEED_DEMO:
         try:
             from scripts.seed_demo import seed
